@@ -2,8 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
+*.rds
 *.geojson
 /gadm
 /maxent
+/wc2.1_5m_bio
 /1_Inputs
 /2_Outputs

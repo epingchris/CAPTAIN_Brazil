@@ -14,17 +14,15 @@ library(flexsdm)
 library(concaveman) #concaveman
 library(sf)
 
-path = "C:/Users/epr26/OneDrive - University of Cambridge/Sweden/lab_Antonelli/"
-
 #Set parallelise plan
 plan(multisession, workers = 10)
 
 #Read AOI shapefile
-aoi = vect(paste0(path, "atlantic_forest_global_200.geojson")) %>%
+aoi = vect("atlantic_forest_global_200.geojson") %>%
   project("EPSG:4326")
 aoi_proj = aoi %>% project("EPSG:3857")
 aoi_bbox = as.polygons(ext(aoi_proj), crs = crs(aoi_proj))
-writeVector(aoi_bbox, paste0(path, "atlantic_forest_global_200_bbox.geojson"), overwrite = T)
+writeVector(aoi_bbox,"atlantic_forest_global_200_bbox.geojson", overwrite = T)
 
 #get world map and land boundary
 worldmap = geodata::world(path = ".") %>% project("EPSG:4326") #GADM
@@ -55,7 +53,7 @@ biovars = c("Annual Mean Temperature",
             "Precipitation of Coldest Quarter")
 
 #Environmental data processing ----
-bioclim_paths = list.files(path = paste0(path, "wc2.1_5m_bio/"), pattern = "tif", full.names = T)
+bioclim_paths = list.files(path = "wc2.1_5m_bio/", pattern = "tif", full.names = T)
 bioclim = rast(bioclim_paths) %>%
   resample(rast(extent = ext(aoi))) %>% #crop exactly to the AOI; crop() doesn't do this
   project("EPSG:3857", res = 10000) #reproject to 10-km
@@ -77,7 +75,7 @@ biovars[keep_vars]
 
 
 #Occurrence data processing ----
-sp_occ_df = readRDS(paste0(path, "SDM_CAPTAIN/SpeciesOccurrenceData.rds")) %>%
+sp_occ_df = readRDS("SpeciesOccurrenceData.rds") %>%
   as.data.frame() %>%
   filter(complete.cases(ddlat) & complete.cases(ddlon)) %>%
   mutate(x = ddlon, y = ddlat)
@@ -85,9 +83,9 @@ sp_occ = sp_occ_df %>%
   vect(geom = c("ddlon", "ddlat"), crs = crs(aoi))
 sp_occ_proj = sp_occ %>%
   project("EPSG:3857")
-writeVector(sp_occ_proj, paste0(path, "SDM_CAPTAIN/SpeciesOccurrenceData.geojson"), overwrite = T)
+writeVector(sp_occ_proj, "SpeciesOccurrenceData.geojson", overwrite = T)
 sp_occ_bbox = crop(sp_occ_proj, ext(aoi_bbox)) #filter species occurrence data by AOI
-writeVector(sp_occ_bbox, paste0(path, "SDM_CAPTAIN/SpeciesOccurrenceData_bbox.geojson"), overwrite = T)
+writeVector(sp_occ_bbox, "SpeciesOccurrenceData_bbox.geojson", overwrite = T)
 
 #visualize
 ggplot() +
@@ -95,7 +93,7 @@ ggplot() +
   geom_spatvector(data = sp_occ, color = "orange", size = 0.05) +
   coord_sf(xlim = c(-120, -5), ylim = c(-50, 40)) +
   theme_bw()
-  
+
 #examine anomalous coordinates
 dim(filter(sp_occ, x > -34.793015)) #many but not all are on islands east of Brazil, 394 entries
 dim(filter(sp_occ, x > -10)) #one entry, definitely wrong
