@@ -1,12 +1,13 @@
 #Setup ----
+library(parallel)
+library(future) #parallelise lapply() : future_lapply()
+library(future.apply) #parallelise lapply(): future_lapply()
 library(magrittr)
 library(tidyverse)
 library(terra)
 library(tidyterra)
 library(geodata) #world, worldclim_global
 library(fuzzyjoin)
-library(future) #parallelise lapply() : future_lapply()
-library(future.apply) #parallelise lapply(): future_lapply()
 library(predicts)
 library(ENMTools) #raster.cor.plot, raster.cor.matrix, trimdupes.by.raster
 library(flexsdm)
@@ -16,7 +17,7 @@ library(sf)
 path = "C:/Users/epr26/OneDrive - University of Cambridge/Sweden/lab_Antonelli/"
 
 #Set parallelise plan
-plan(multisession, workers = 20)
+plan(multisession, workers = 10)
 
 #Read AOI shapefile
 aoi = vect(paste0(path, "atlantic_forest_global_200.geojson")) %>%
@@ -117,49 +118,47 @@ anomaly = fuzzyjoin::difference_inner_join(
   rename(x = x.x, y = y.x)
 
 
-#Build models ----
-
-#examine data abundance
+# Perform thinning and examine sample size ----
 tax_df = as.data.frame(table(sp_occ_bbox$tax)) %>%
   rename(tax = Var1, count = Freq)
 n_sp = nrow(tax_df)
 
-samp_size_df = data.frame(original = rep(NA, n_sp), trimdupes = rep(NA, n_sp), occfilt = rep(NA, n_sp), flag = rep("", n_sp))
-sp_occ_thin_list = vector("list", n_sp)
+#samp_size_df = data.frame(original = rep(NA, n_sp), trimdupes = rep(NA, n_sp), occfilt = rep(NA, n_sp), flag = rep("", n_sp))
+#sp_occ_thin_list = vector("list", n_sp)
 
-out = future_lapply(seq_len(n_sp), function(i) {
+thinning_out = future_lapply(seq_len(n_sp), function(i) {
   a = Sys.time()
   sp_occ_sel = sp_occ_bbox[sp_occ_bbox$tax == tax_df$tax[i], ]
-  samp_size_df$original[i] = nrow(sp_occ_sel)
+  n_orig = nrow(sp_occ_sel)
   
   #geographical distributions of occurrence data and features that may cause spatial biases
   #can be explored using visualization tools in the ‘sampbias' package
   
   #spatial-grid thinning based on one point per grid cell
-  sp_occ_thin_last = ENMTools::trimdupes.by.raster(sp_occ_sel, bioclim)
-  sp_occ_thin = sp_occ_sel[geom(sp_occ_sel) %in% geom(sp_occ_thin_last)]
-  samp_size_df$trimdupes[i] = nrow(sp_occ_thin)
+  sp_occ_trimdupes = ENMTools::trimdupes.by.raster(sp_occ_sel, bioclim)
+  n_trimdupes = nrow(sp_occ_trimdupes)
 
   #spatial-grid thinning based on nearest-neighbor distance larger than grid cell size
-  sp_occ_thin_occfilt = flexsdm::occfilt_geo(data = crds(sp_occ_sel) %>% as.data.frame(),
-                                             x = "x", y = "y",
-                                             env_layer = bioclim,
-                                             method = c("cellsize", 1),
-                                             prj = crs(bioclim)) %>%
+  sp_occ_occfilt = flexsdm::occfilt_geo(data = crds(sp_occ_sel) %>% as.data.frame(),
+                                        x = "x", y = "y",
+                                        env_layer = bioclim,
+                                        method = c("cellsize", 1),
+                                        prj = crs(bioclim)) %>%
     vect(geom = c("x", "y"), crs = crs(bioclim))
-  sp_occ_thin = sp_occ_sel[geom(sp_occ_sel) %in% geom(sp_occ_thin_occfilt)]
-
-  samp_size_df$occfilt[i] = nrow(sp_occ_thin)
-  n_occfilt = nrow(sp_occ_thin)
+  n_occfilt = nrow(sp_occ_occfilt)
+  sp_occ_occfilt_attr = sp_occ_sel[geom(sp_occ_sel) %in% geom(sp_occ_occfilt)]
   
   #flag data point abundance
-  sp_occ_thin_list[[i]] = sp_occ_thin
-  samp_size = nrow(sp_occ_thin)
-  samp_size_flag = ifelse(samp_size >= 30, "abundant", ifelse(samp_size >= 15, "rare", "insufficient"))
-  b = Sys.time()
-  cat(i, ":", as.character(tax_df$tax[i]), ",", b - a, "\n")
-}
+  samp_size_flag = ifelse(n_occfilt >= 30, "abundant", ifelse(n_occfilt >= 15, "rare", "insufficient"))
+  samp_size_df = data.frame(original = n_orig, trimdupes = n_trimdupes, occfilt = n_occfilt, flag = samp_size_flag)
 
+  b = Sys.time()
+  cat(i, "-", as.character(tax_df$tax[i]), ":", b - a, "\n")
+  return(sp_occ = sp_occ_occfilt_attr, samp_size_df = samp_size_df)
+}, future.seed = T)
+
+
+#Run models ----
 set.seed(1963)
 out = future_lapply(seq_along(tax_df$tax), function(i) {
   if(samp_size >= 30) {
