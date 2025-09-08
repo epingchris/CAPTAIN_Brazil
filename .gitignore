@@ -2,3 +2,8 @@
 .Rhistory
 .RData
 .Ruserdata
+*.geojson
+/gadm
+/maxent
+/1_Inputs
+/2_Outputs
