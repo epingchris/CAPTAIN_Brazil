@@ -4,6 +4,9 @@
 .Ruserdata
 *.rds
 *.geojson
+*.pdf
+*.tif
+*.csv
 /gadm
 /maxent
 /wc2.1_5m_bio

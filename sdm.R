@@ -1,4 +1,5 @@
 #Setup ----
+library(httpgd) #view plots in VS Code
 library(parallel)
 library(future) #parallelise lapply() : future_lapply()
 library(future.apply) #parallelise lapply(): future_lapply()
@@ -15,14 +16,15 @@ library(concaveman) #concaveman
 library(sf)
 
 #Set parallelise plan
-plan(multisession, workers = 10)
+parallel::detectCores(logical = F) #256
+plan(multisession, workers = 20)
 
 #Read AOI shapefile
 aoi = vect("atlantic_forest_global_200.geojson") %>%
   project("EPSG:4326")
 aoi_proj = aoi %>% project("EPSG:3857")
 aoi_bbox = as.polygons(ext(aoi_proj), crs = crs(aoi_proj))
-writeVector(aoi_bbox,"atlantic_forest_global_200_bbox.geojson", overwrite = T)
+writeVector(aoi_bbox, "atlantic_forest_global_200_bbox.geojson", overwrite = T)
 
 #get world map and land boundary
 worldmap = geodata::world(path = ".") %>% project("EPSG:4326") #GADM
@@ -30,6 +32,7 @@ worldmap_aoi = worldmap %>%
   project("EPSG:3857") %>%
   crop(ext(aoi_bbox))
 land = aggregate(worldmap_aoi)
+writeVector(land, "aoi_land.geojson", overwrite = T)
 
 #bioclimatic variable names
 biovars = c("Annual Mean Temperature", 
@@ -65,20 +68,21 @@ bioclim = bioclim[[var_order]]
 #sequential: ‘fuzzySim', ‘SDMtune', ‘usdm')
 #or reducing variable dimensionality through ordination (‘ENMTML', ‘ENMTools', ‘flexsdm', ‘kuenm', ‘ntbox')
 #flexsdm::correct_colinvar but there is an error
-ENMTools::raster.cor.plot(bioclim) #keep 1, 2, 7, 12, 15, 18, 19
+cor_plot = ENMTools::raster.cor.plot(bioclim) #keep 1, 2, 7, 12, 15, 18, 19
 keep_vars = c(1, 2, 7, 12, 15, 18, 19)
 bioclim_red = bioclim[[keep_vars]]
 ENMTools::raster.cor.plot(bioclim_red)
 mat_cor = ENMTools::raster.cor.matrix(bioclim_red)
 diag(mat_cor) = NA
 biovars[keep_vars]
+writeRaster(bioclim_red,"bioclim_reduced.tif", overwrite = T)
 
 
 #Occurrence data processing ----
 sp_occ_df = readRDS("SpeciesOccurrenceData.rds") %>%
   as.data.frame() %>%
   filter(complete.cases(ddlat) & complete.cases(ddlon)) %>%
-  mutate(x = ddlon, y = ddlat)
+  mutate(x = ddlon, y = ddlat, index = row_number())
 sp_occ = sp_occ_df %>%
   vect(geom = c("ddlon", "ddlat"), crs = crs(aoi))
 sp_occ_proj = sp_occ %>%
@@ -124,9 +128,14 @@ n_sp = nrow(tax_df)
 #samp_size_df = data.frame(original = rep(NA, n_sp), trimdupes = rep(NA, n_sp), occfilt = rep(NA, n_sp), flag = rep("", n_sp))
 #sp_occ_thin_list = vector("list", n_sp)
 
-thinning_out = future_lapply(seq_len(n_sp), function(i) {
+sp_occ_list = vector("list", n_sp)
+samp_size_df = data.frame(index = numeric(), sp_name = character(),
+                          original = numeric(), trimdupes = numeric(), occfilt = numeric(), flag = character())
+
+for(i in seq_len(n_sp)) {
   a = Sys.time()
-  sp_occ_sel = sp_occ_bbox[sp_occ_bbox$tax == tax_df$tax[i], ]
+  sp_name = as.character(tax_df$tax[i])
+  sp_occ_sel = sp_occ_bbox[sp_occ_bbox$tax == sp_name, ]
   n_orig = nrow(sp_occ_sel)
   
   #geographical distributions of occurrence data and features that may cause spatial biases
@@ -148,218 +157,16 @@ thinning_out = future_lapply(seq_len(n_sp), function(i) {
   
   #flag data point abundance
   samp_size_flag = ifelse(n_occfilt >= 30, "abundant", ifelse(n_occfilt >= 15, "rare", "insufficient"))
-  samp_size_df = data.frame(original = n_orig, trimdupes = n_trimdupes, occfilt = n_occfilt, flag = samp_size_flag)
+  samp_size_df[i, ] = data.frame(index = i, sp_name = sp_name,
+                                 original = n_orig, trimdupes = n_trimdupes, occfilt = n_occfilt, flag = samp_size_flag)
+  sp_occ_list[[i]] = sp_occ_occfilt_attr$index
 
   b = Sys.time()
-  cat(i, "-", as.character(tax_df$tax[i]), ":", b - a, "\n")
-  return(sp_occ = sp_occ_occfilt_attr, samp_size_df = samp_size_df)
-}, future.seed = T)
+  cat(i, "-", sp_name, ":", b - a, "s\n")
+}
 
+samp_size_df$trimdupes_perc = round(samp_size_df$trimdupes / samp_size_df$original * 100, 1)
+samp_size_df$occfilt_perc = round(samp_size_df$occfilt / samp_size_df$original * 100, 1)
 
-#Run models ----
-set.seed(1963)
-out = future_lapply(seq_along(tax_df$tax), function(i) {
-  if(samp_size >= 30) {
-    #set training extent (other option: flexsdm::calib_area(), more simplistic)
-
-    #create alpha shape with alpha = 3
-    ashape = st_as_sf(sp_occ_thin) %>%
-      concaveman::concaveman(concavity = 3) %>%
-      st_cast("POLYGON") %>%
-      vect()
-    
-    #buffer with 2 x median inter-point distance, then crop to land
-    dist = terra::distance(sp_occ_thin, unit = "m", method = "geo") %>% as.matrix()
-    diag(dist) = NA
-    dist[upper.tri(dist)] = NA
-    interdist = median(as.vector(dist), na.rm = T)
-    ashape_buff = terra::buffer(ashape, interdist * 2) %>% #width unit is in meter!
-      intersect(land)
-    
-    #ecological clipping: restrict sampling to areas within a specified environmental distance
-    #@@@to do@@@ (‘biomod2', ‘ENMTML', ‘flexsdm')
-    
-    #sample background points (other option: flexsdm::sample_background)
-    bg = spatSample(ashape_buff, 1000, "random")
-    
-    #visualize to verify
-    plot_sample = ggplot() +
-      geom_spatraster(data = bioclim[[1]]) +
-      geom_spatvector(data = aoi_proj, color = "red", alpha = 0, linewidth = 0.5) +
-      geom_spatvector(data = bg, color = "blue", size = 0.05) +
-      geom_spatvector(data = sp_occ_sel, color = "orange", size = 1) +
-      geom_spatvector(data = sp_occ_thin, color = "green", size = 0.5) +
-      geom_spatvector(data = ashape, color = "white", alpha = 0) +
-      geom_spatvector(data = ashape_buff, color = "red", alpha = 0) +
-      scale_fill_grass_c(palette = "viridis")
-    plot_sample
-
-    #construct SDM model input data:
-    #extract environmental variables at background points and species occurrence points
-    bg_var = extract(bioclim_red, bg, ID = F, xy = T) %>%
-      filter(complete.cases(.)) %>%
-      mutate(pb = 0)
-    sp_occ_var = extract(bioclim_red, sp_occ_thin, ID = F, xy = T) %>%
-      filter(complete.cases(.)) %>%
-      mutate(pb = 1)
-    sdm_data_xy = rbind(sp_occ_var, bg_var)
-    
-    #partition data into training-testing using spatial blocks
-    sdm_part = flexsdm::part_sblock(
-        data = sdm_data_xy,
-        bioclim,
-        pr_ab = "pb",
-        x = "x",
-        y = "y",
-        n_part = 5)
-    sdm_part_vect = sdm_part$part %>%
-      mutate(.part = as.factor(.part)) %>%
-      vect(geom = c("x", "y"), crs = crs(bioclim))
-    plot_part = ggplot() +
-      geom_spatvector(data = land, alpha = 0) +
-      geom_spatraster(data = sdm_part$grid, alpha = 0.3) +
-      geom_spatvector(data = filter(sdm_part_vect, pr_ab == 0), aes(col = .part), cex = 0.5) +
-      geom_spatvector(data = filter(sdm_part_vect, pr_ab == 1), aes(col = .part), cex = 1) +
-      scale_fill_grass_c(palette = "grey") +
-      scale_color_manual(values = c("red", "green", "blue", "purple",  "yellow")) +
-      theme_bw()
-    plot_part
-    sdm_data = sdm_data_xy %>%
-      mutate(part = sdm_part$part$.part) %>%
-      dplyr::select(!c(x, y))
-      
-    # sdm_dirs = sdm_directory(main_dir = paste0(path, "SDM_CAPTAIN/"),
-    #                          projections = NULL,
-    #                          calibration_area = T,
-    #                          algorithm = c("gam", "glm", "max", "raf"),
-    #                          ensemble = c("mean", "meanthr"))
-
-        
-    #bioclimatic envelope model
-    m_env = predicts::envelope(subset(spp_occ_var, select = -pb))
-    pred_env = predict(bioclim_red, m_env)
-    plot_env = ggplot() +
-      geom_spatraster(data = pred_env) +
-      geom_spatvector(data = sp_occ_thin, cex = 0.5, col = "red") +
-      scale_fill_grass_c(limits = c(0, 1), palette = "viridis") +
-      labs(main = "Bioclimatic envelope", fill = "Probability") +
-      theme_bw()
-    plot_env
-
-    #MaxEnt model
-    m_max = flexsdm::fit_max(
-      data = sdm_data,
-      response = "pb",
-      predictors = paste0("wc2.1_5m_bio_", keep_vars),
-      partition = "part",
-      thr = "max_sens_spec")
-    
-    #GLM model
-    m_glm = flexsdm::fit_glm(
-      data = sdm_data,
-      response = "pb",
-      predictors = paste0("wc2.1_5m_bio_", keep_vars),
-      partition = "part",
-      thr = "max_sens_spec")
-    
-    #GAM model
-    m_gam = flexsdm::fit_gam(
-      data = sdm_data,
-      response = "pb",
-      predictors = paste0("wc2.1_5m_bio_", keep_vars),
-      partition = "part",
-      thr = "max_sens_spec")
-    
-    #random forest model
-    m_raf = flexsdm::fit_raf(
-      data = sdm_data,
-      response = "pb",
-      predictors = paste0("wc2.1_5m_bio_", keep_vars),
-      partition = "part",
-      thr = "max_sens_spec")
-    
-    
-    #generate predictions
-    pred_list = sdm_predict(
-      models = list(m_max, m_glm, m_gam, m_raf),
-      pred = bioclim,
-      predict_area = land
-    )
-
-    plot_max = ggplot() +
-      geom_spatraster(data = pred_list$max) +
-      geom_spatvector(data = sp_occ_thin, cex = 0.5, col = "red") +
-      scale_fill_grass_c(limits = c(0, 1), palette = "viridis") +
-      labs(main = "Maxent", fill = "Probability") +
-      theme_bw()
-    plot_max
-    
-    plot_glm = ggplot() +
-      geom_spatraster(data = pred_list$glm) +
-      geom_spatvector(data = sp_occ_thin, cex = 0.5, col = "red") +
-      scale_fill_grass_c(limits = c(0, 1), palette = "viridis") +
-      labs(main = "GLM", fill = "Probability") +
-      theme_bw()
-    plot_glm
-    
-    plot_gam = ggplot() +
-      geom_spatraster(data = pred_list$gam) +
-      geom_spatvector(data = sp_occ_thin, cex = 0.5, col = "red") +
-      scale_fill_grass_c(limits = c(0, 1), palette = "viridis") +
-      labs(main = "GAM", fill = "Probability") +
-      theme_bw()
-    plot_gam
-
-    plot_raf = ggplot() +
-      geom_spatraster(data = pred_list$raf) +
-      geom_spatvector(data = sp_occ_thin, cex = 0.5, col = "red") +
-      scale_fill_grass_c(limits = c(0, 1), palette = "viridis") +
-      labs(main = "Random forest", fill = "Probability") +
-      theme_bw()
-    plot_raf
-    
-  } else if(samp_size >= 15) {
-    sdm_data_xy = NULL
-    plot_sample = NULL
-    sdm_part = NULL
-    plot_part = NULL
-    m_env = NULL
-    m_max = NULL
-    m_glm = NULL
-    m_gam = NULL
-    m_raf = NULL
-    pred_env = NULL
-    pred_list = NULL
-    plot_env = NULL
-    plot_max = NULL
-    plot_glm = NULL
-    plot_gam = NULL
-    plot_raf = NULL
-  } else {
-    sdm_data_xy = NULL
-    plot_sample = NULL
-    sdm_part = NULL
-    plot_part = NULL
-    m_env = NULL
-    m_max = NULL
-    m_glm = NULL
-    m_gam = NULL
-    m_raf = NULL
-    pred_env = NULL
-    pred_list = NULL
-    plot_env = NULL
-    plot_max = NULL
-    plot_glm = NULL
-    plot_gam = NULL
-    plot_raf = NULL
-  }
-  
-  return(list(samp_size = samp_size_df,
-              data = sdm_data_xy,
-              diagnostics = list(plot_sample, sdm_part, plot_part),
-              models = list(m_env, m_max, m_glm, m_gam, m_raf),
-              predictions = list(pred_env, pred_list),
-              plots = list(plot_env,plot_max, plot_glm, plot_gam, plot_raf))
-         )
-})
-  
+write.csv(samp_size_df, "species_sample_size.csv", row.names = F)
+saveRDS(sp_occ_list, "species_occurrence_thinned.rds")
