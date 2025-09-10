@@ -6,6 +6,7 @@
 *.geojson
 *.pdf
 *.tif
+*.txt
 *.csv
 /gadm
 /maxent
