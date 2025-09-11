@@ -17,10 +17,14 @@ library(flexsdm)
 library(concaveman) #concaveman
 library(sf)
 
+hgd()
+save_path = "/maps/epr26/sdm_captain_out/"
+
 #Set optional user-selected project(s) to run
 args = commandArgs(trailingOnly = T)
-samp_size_df = read.csv("species_sample_size.csv", header = T)
+samp_size_df = read.csv(paste0(save_path, "species_sample_size.csv"), header = T)
 n_sp = nrow(samp_size_df)
+
 if (length(args) == 0) {
   #all projects in project_var.csv
   n0 = 1
@@ -41,14 +45,13 @@ cat("Running species from", n0, "to", n1, "\n")
 #plan(multisession, workers = 20)
 
 #Get data
-aoi_proj = vect("atlantic_forest_global_200.geojson") %>% project("EPSG:3857")
-aoi_bbox = vect("atlantic_forest_global_200_bbox.geojson")
-land = vect("aoi_land.geojson")
-sp_occ_bbox = vect("SpeciesOccurrenceData_bbox.geojson")
-bioclim = rast("bioclim_reduced.tif")
-sp_occ_list = readRDS("species_occurrence_thinned.rds")
+aoi_proj = vect(paste0(save_path, "atlantic_forest_global_200.geojson")) %>% project("EPSG:3857")
+aoi_bbox = vect(paste0(save_path, "atlantic_forest_global_200_bbox.geojson"))
+land = vect(paste0(save_path, "aoi_land.geojson"))
+sp_occ_bbox = vect(paste0(save_path, "SpeciesOccurrenceData_bbox.geojson"))
+bioclim = rast(paste0(save_path, "bioclim_reduced.tif"))
+sp_occ_list = readRDS(paste0(save_path, "species_occurrence_thinned.rds"))
 keep_vars = c(1, 2, 7, 12, 15, 18, 19) #indices of selected bioclim variables after collinearity test
-save_path = "/maps/epr26/sdm_captain_out/"
 
 
 #Run models ----
@@ -60,10 +63,11 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
 
   samp_size_info = samp_size_df[i, ]
   sp_name = samp_size_info$sp_name
-  samp_used = samp_size_info$data_used
-  samp_size = ifelse(samp_used == "thinning", samp_size_info$thinned, samp_size_info$original)
+  samp_size = samp_size_info$n_used
+  cat("Running model for species", i, "sample size:", samp_size, "\n")
 
-  if(samp_size >= 30) {
+  if(samp_size >= 30) { #3105 species have >= 30 occurrence points after thinning
+    i_pad = str_pad(i, 4, side = "left", pad = "0") #haha
     sp_occ_sel = sp_occ_bbox[sp_occ_bbox$tax == sp_name, ]
     sp_occ_used = sp_occ_bbox[sp_occ_bbox$index %in% sp_occ_list[[i]], ]
     #set training extent (other option: flexsdm::calib_area(), more simplistic)
@@ -94,8 +98,10 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
       geom_spatvector(data = sp_occ_used, color = "green", size = 0.5) +
       geom_spatvector(data = ashape, color = "white", alpha = 0) +
       geom_spatvector(data = ashape_buff, color = "red", alpha = 0) +
-      scale_fill_continuous(type = "viridis") #scale_fill_grass_c somehow doesn't work
-    plot_sample
+      scale_fill_continuous(type = "viridis") + #scale_fill_grass_c somehow doesn't work
+      theme_bw()
+    ggsave(filename = paste0(save_path, "/plots/plot_sample_", i_pad, ".png"),
+           plot = plot_sample, width = 6, height = 8, units = "in", dpi = 300)
 
     #construct SDM model input data:
     #extract environmental variables at background points and species occurrence points
@@ -122,6 +128,8 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
       scale_color_manual(values = c("red", "green", "blue", "purple")) +
       theme_bw()
     plot_part
+    ggsave(filename = paste0(save_path, "/plots/plot_part_", i_pad, ".png"),
+           plot = plot_part, width = 6, height = 8, units = "in", dpi = 300)
     sdm_data = sdm_data_xy %>%
       mutate(part = sdm_part$.part) %>%
       dplyr::select(!c(x, y))
@@ -168,45 +176,54 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     
     
     #generate predictions
-    pred_list = sdm_predict(
+    pred_list = flexsdm::sdm_predict(
       models = list(m_max, m_glm, m_gam, m_net, m_raf),
       pred = bioclim,
       predict_area = land
     )
 
     if (!is.null(pred_list$max)) {
+      writeRaster(pred_list$max, paste0(save_path, "/rasters/pred_max_", i, ".tif"), overwrite = T)
       plot_max = ggplot() +
         geom_spatraster(data = pred_list$max) +
         geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
         scale_fill_continuous(limits = c(0, 1), type = "viridis") +
-        labs(main = "Maxent", fill = "Probability") +
+        labs(title = "Maxent", fill = "Probability") +
         theme_bw()
       plot_max
+      ggsave(filename = paste0(save_path, "/plots/plot_m_max_", i_pad, ".png"),
+             plot = plot_max, width = 6, height = 8, units = "in", dpi = 300)
     } else {
       cat("Maxent model failed for species", sp_name, "\n")
       plot_max = NULL
     }
 
     if (!is.null(pred_list$glm)) {
+      writeRaster(pred_list$glm, paste0(save_path, "/rasters/pred_glm_", i, ".tif"), overwrite = T)
       plot_glm = ggplot() +
         geom_spatraster(data = pred_list$glm) +
         geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
         scale_fill_continuous(limits = c(0, 1), type = "viridis") +
-        labs(main = "GLM", fill = "Probability") +
+        labs(title = "GLM", fill = "Probability") +
         theme_bw()
       plot_glm
+      ggsave(filename = paste0(save_path, "/plots/plot_m_glm_", i_pad, ".png"),
+             plot = plot_glm, width = 6, height = 8, units = "in", dpi = 300)
     } else {
       cat("GLM model failed for species", sp_name, "\n")
       plot_glm = NULL
     }
 
     if (!is.null(pred_list$gam)) {
+      writeRaster(pred_list$gam, paste0(save_path, "/rasters/pred_gam_", i, ".tif"), overwrite = T)
       plot_gam = ggplot() +
         geom_spatraster(data = pred_list$gam) +
         geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
         scale_fill_continuous(limits = c(0, 1), type = "viridis") +
-        labs(main = "GAM", fill = "Probability") +
+        labs(title = "GAM", fill = "Probability") +
         theme_bw()
+      ggsave(filename = paste0(save_path, "/plots/plot_m_gam_", i_pad, ".png"),
+             plot = plot_gam, width = 6, height = 8, units = "in", dpi = 300)
       plot_gam
     } else {
       cat("GAM model failed for species", sp_name, "\n")
@@ -214,19 +231,23 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     }
     
     if (!is.null(pred_list$net)) {
+      writeRaster(pred_list$net, paste0(save_path, "/rasters/pred_net_", i, ".tif"), overwrite = T)
       plot_net = ggplot() +
         geom_spatraster(data = pred_list$net) +
         geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
         scale_fill_continuous(limits = c(0, 1), type = "viridis") +
-        labs(main = "Neural network", fill = "Probability") +
+        labs(title = "Neural network", fill = "Probability") +
         theme_bw()
       plot_net
+      ggsave(filename = paste0(save_path, "/plots/plot_m_net_", i_pad, ".png"),
+             plot = plot_net, width = 6, height = 8, units = "in", dpi = 300)
     } else {
       cat("Neural network model failed for species", sp_name, "\n")
       plot_net = NULL
     }
 
     if (!is.null(pred_list$raf)) {
+      writeRaster(pred_list$raf, paste0(save_path, "/rasters/pred_raf_", i, ".tif"), overwrite = T)
       plot_raf = ggplot() +
         geom_spatraster(data = pred_list$raf) +
         geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
@@ -234,6 +255,8 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
         labs(main = "Random forest", fill = "Probability") +
         theme_bw()
       plot_raf
+      ggsave(filename = paste0(save_path, "/plots/plot_m_raf_", i_pad, ".png"),
+             plot = plot_raf, width = 6, height = 8, units = "in", dpi = 300)
     } else {    
       cat("Random forest model failed for species", sp_name, "\n")
       plot_raf = NULL
@@ -241,6 +264,7 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     
   } else {
     sdm_data_xy = NULL
+    sdm_data = NULL
     plot_sample = NULL
     sdm_part = NULL
     plot_part = NULL
@@ -257,14 +281,10 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     plot_raf = NULL
   }
   b = Sys.time()
-  cat("Species", i, "sample size:", samp_size, "Time:", b - a, "\n")
+  cat("Model completed for species", i, ", run time:", b - a, "\n")
 
-  sdm_out = list(samp_size = samp_size_info,
-                 data = sdm_data_xy,
-                 diagnostics = list(plot_sample, sdm_part, plot_part),
-                 models = list(m_max, m_glm, m_gam, m_net, m_raf),
-                 predictions = pred_list,
-                 plots = list(plot_max, plot_glm, plot_gam, plot_net, plot_raf))
+  sdm_out = list(samp_size_info, sdm_data_xy, sdm_data,
+                 models = list(max = m_max, glm = m_glm, gam = m_gam, net = m_net, raf = m_raf))
   saveRDS(sdm_out, paste0(save_path, "/models/sdm_model_outputs_", i, ".rds"))
 
 }

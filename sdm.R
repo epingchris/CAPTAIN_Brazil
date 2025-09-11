@@ -15,12 +15,15 @@ library(flexsdm)
 library(concaveman) #concaveman
 library(sf)
 
+hgd()
+save_path = "/maps/epr26/sdm_captain_out/"
+
 #Read AOI shapefile
-aoi = vect("atlantic_forest_global_200.geojson") %>%
+aoi = vect(paste0(save_path, "atlantic_forest_global_200.geojson")) %>%
   project("EPSG:4326")
 aoi_proj = aoi %>% project("EPSG:3857")
 aoi_bbox = as.polygons(ext(aoi_proj), crs = crs(aoi_proj))
-writeVector(aoi_bbox, "atlantic_forest_global_200_bbox.geojson", overwrite = T)
+writeVector(aoi_bbox, paste0(save_path, "atlantic_forest_global_200_bbox.geojson"), overwrite = T)
 
 #get world map and land boundary
 worldmap = geodata::world(path = ".") %>% project("EPSG:4326") #GADM
@@ -28,7 +31,7 @@ worldmap_aoi = worldmap %>%
   project("EPSG:3857") %>%
   crop(ext(aoi_bbox))
 land = aggregate(worldmap_aoi)
-writeVector(land, "aoi_land.geojson", overwrite = T)
+writeVector(land, paste0(save_path, "aoi_land.geojson"), overwrite = T)
 
 #bioclimatic variable names
 biovars = c("Annual Mean Temperature", 
@@ -71,11 +74,11 @@ ENMTools::raster.cor.plot(bioclim_red)
 mat_cor = ENMTools::raster.cor.matrix(bioclim_red)
 diag(mat_cor) = NA
 #biovars[keep_vars]
-writeRaster(bioclim_red,"bioclim_reduced.tif", overwrite = T)
+writeRaster(bioclim_red, paste0(save_path, "bioclim_reduced.tif"), overwrite = T)
 
 
 #Occurrence data processing ----
-sp_occ_df = readRDS("SpeciesOccurrenceData.rds") %>%
+sp_occ_df = readRDS(paste0(save_path, "SpeciesOccurrenceData.rds")) %>%
   as.data.frame() %>%
   filter(complete.cases(ddlat) & complete.cases(ddlon)) %>%
   mutate(x = ddlon, y = ddlat, index = row_number())
@@ -83,9 +86,9 @@ sp_occ = sp_occ_df %>%
   vect(geom = c("ddlon", "ddlat"), crs = crs(aoi))
 sp_occ_proj = sp_occ %>%
   project("EPSG:3857")
-writeVector(sp_occ_proj, "SpeciesOccurrenceData.geojson", overwrite = T)
+writeVector(sp_occ_proj, paste0(save_path, "SpeciesOccurrenceData.geojson"), overwrite = T)
 sp_occ_bbox = crop(sp_occ_proj, ext(aoi_bbox)) #filter species occurrence data by AOI
-writeVector(sp_occ_bbox, "SpeciesOccurrenceData_bbox.geojson", overwrite = T)
+writeVector(sp_occ_bbox, paste0(save_path, "SpeciesOccurrenceData_bbox.geojson"), overwrite = T)
 
 #visualize
 ggplot() +
@@ -123,7 +126,8 @@ n_sp = nrow(tax_df)
 
 sp_occ_list = vector("list", n_sp)
 samp_size_df = data.frame(index = numeric(), sp_name = character(),
-                          original = numeric(), thinned = numeric(), data_used = character(), flag = character())
+                          original = numeric(), thinned = numeric(), thin_perc = numeric(),
+                          data_used = character(), n_used = numeric(), flag = character())
 
 for(i in seq_len(n_sp)) {
   a = Sys.time()
@@ -166,14 +170,13 @@ for(i in seq_len(n_sp)) {
   #flag data point abundance
   samp_size_flag = ifelse(n_used >= 30, "abundant", ifelse(n_used >= 15, "sparse", "insufficient"))
   samp_size_df[i, ] = data.frame(index = i, sp_name = sp_name,
-                                 original = n_orig, thinned = n_thin, data_used = use, flag = samp_size_flag)
+                                 original = n_orig, thinned = n_thin, thin_perc = round((n_thin / n_orig) * 100, 1),
+                                 data_used = use, n_used = n_used, flag = samp_size_flag)
   sp_occ_list[[i]] = sp_occ_used$index
 
   b = Sys.time()
   cat(i, "-", sp_name, ":", b - a, "s\n")
 }
 
-samp_size_df$thin_perc = round(samp_size_df$thinned / samp_size_df$original * 100, 1)
-
-write.csv(samp_size_df, "species_sample_size.csv", row.names = F)
-saveRDS(sp_occ_list, "species_occurrence_thinned.rds")
+write.csv(samp_size_df, paste0(save_path, "species_sample_size.csv"), row.names = F)
+saveRDS(sp_occ_list, paste0(save_path, "species_occurrence_thinned.rds"))
