@@ -53,6 +53,12 @@ bioclim = rast(paste0(save_path, "bioclim_reduced.tif"))
 sp_occ_list = readRDS(paste0(save_path, "species_occurrence_thinned.rds"))
 keep_vars = c(1, 2, 7, 12, 15, 18, 19) #indices of selected bioclim variables after collinearity test
 
+#calculate range of bioclim variables across the AOI
+range_bioclim = apply(values(bioclim), 2, function(x) range(x, na.rm = T)) %>%
+  t() %>%
+  as.data.frame() %>%
+  rename(min = V1, max = V2) %>%
+  mutate(range = max - min)
 
 #Run models ----
 #set.seed(1963)
@@ -133,15 +139,20 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     sdm_data = sdm_data_xy %>%
       mutate(part = sdm_part$.part) %>%
       dplyr::select(!c(x, y))
-      
-    #MaxEnt model
-    m_max = flexsdm::fit_max(
-      data = sdm_data,
-      response = "pb",
-      predictors = paste0("wc2.1_5m_bio_", keep_vars),
-      partition = "part",
-      thr = "max_sens_spec")
     
+    #Calculate range coverage of background points
+    range_bg = apply(bg_var[, 1:7], 2, range) %>%
+      t() %>%
+      as.data.frame() %>%
+      rename(min = V1, max = V2) %>%
+      mutate(range = max - min)
+
+    range_coverage = range_bg$range / range_bioclim$range %>%
+      t() %>%
+      as.data.frame()
+    rownames(range_coverage) = i
+    colnames(range_coverage) = paste0("wc2.1_5m_bio_", keep_vars)
+
     #GLM model
     m_glm = flexsdm::fit_glm(
       data = sdm_data,
@@ -152,14 +163,6 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     
     #GAM model
     m_gam = flexsdm::fit_gam(
-      data = sdm_data,
-      response = "pb",
-      predictors = paste0("wc2.1_5m_bio_", keep_vars),
-      partition = "part",
-      thr = "max_sens_spec")
-
-    #neural network model
-    m_net = flexsdm::fit_net(
       data = sdm_data,
       response = "pb",
       predictors = paste0("wc2.1_5m_bio_", keep_vars),
@@ -177,29 +180,13 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     
     #generate predictions
     pred_list = flexsdm::sdm_predict(
-      models = list(m_max, m_glm, m_gam, m_net, m_raf),
+      models = list(m_glm, m_gam, m_raf),
       pred = bioclim,
       predict_area = land
     )
 
-    if (!is.null(pred_list$max)) {
-      writeRaster(pred_list$max, paste0(save_path, "/rasters/pred_max_", i, ".tif"), overwrite = T)
-      plot_max = ggplot() +
-        geom_spatraster(data = pred_list$max) +
-        geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
-        scale_fill_continuous(limits = c(0, 1), type = "viridis") +
-        labs(title = "Maxent", fill = "Probability") +
-        theme_bw()
-      plot_max
-      ggsave(filename = paste0(save_path, "/plots/plot_m_max_", i_pad, ".png"),
-             plot = plot_max, width = 6, height = 8, units = "in", dpi = 300)
-    } else {
-      cat("Maxent model failed for species", sp_name, "\n")
-      plot_max = NULL
-    }
-
     if (!is.null(pred_list$glm)) {
-      writeRaster(pred_list$glm, paste0(save_path, "/rasters/pred_glm_", i, ".tif"), overwrite = T)
+      writeRaster(pred_list$glm, paste0(save_path, "/rasters/pred_glm_", i_pad, ".tif"), overwrite = T)
       plot_glm = ggplot() +
         geom_spatraster(data = pred_list$glm) +
         geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
@@ -229,22 +216,6 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
       cat("GAM model failed for species", sp_name, "\n")
       plot_gam = NULL
     }
-    
-    if (!is.null(pred_list$net)) {
-      writeRaster(pred_list$net, paste0(save_path, "/rasters/pred_net_", i, ".tif"), overwrite = T)
-      plot_net = ggplot() +
-        geom_spatraster(data = pred_list$net) +
-        geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
-        scale_fill_continuous(limits = c(0, 1), type = "viridis") +
-        labs(title = "Neural network", fill = "Probability") +
-        theme_bw()
-      plot_net
-      ggsave(filename = paste0(save_path, "/plots/plot_m_net_", i_pad, ".png"),
-             plot = plot_net, width = 6, height = 8, units = "in", dpi = 300)
-    } else {
-      cat("Neural network model failed for species", sp_name, "\n")
-      plot_net = NULL
-    }
 
     if (!is.null(pred_list$raf)) {
       writeRaster(pred_list$raf, paste0(save_path, "/rasters/pred_raf_", i, ".tif"), overwrite = T)
@@ -268,23 +239,23 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
     plot_sample = NULL
     sdm_part = NULL
     plot_part = NULL
-    m_max = NULL
+    range_coverage = NULL
     m_glm = NULL
     m_gam = NULL
-    m_net = NULL
     m_raf = NULL
     pred_list = NULL
-    plot_max = NULL
     plot_glm = NULL
     plot_gam = NULL
-    plot_net = NULL
     plot_raf = NULL
   }
   b = Sys.time()
   cat("Model completed for species", i, ", run time:", b - a, "\n")
 
-  sdm_out = list(samp_size_info, sdm_data_xy, sdm_data,
-                 models = list(max = m_max, glm = m_glm, gam = m_gam, net = m_net, raf = m_raf))
+  sdm_out = list(samp_size_info = samp_size_info,
+                 sdm_data_xy = sdm_data_xy,
+                 sdm_data = sdm_data,
+                 range_coverage = range_coverage,
+                 models = list(glm = m_glm, gam = m_gam, raf = m_raf))
   saveRDS(sdm_out, paste0(save_path, "/models/sdm_model_outputs_", i, ".rds"))
 
 }

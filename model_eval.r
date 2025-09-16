@@ -22,7 +22,7 @@ save_path = "/maps/epr26/sdm_captain_out/"
 
 #Set optional user-selected project(s) to run
 args = commandArgs(trailingOnly = T)
-samp_size_df = read.csv("species_sample_size.csv", header = T)
+samp_size_df = read.csv(paste0(save_path, "species_sample_size.csv"), header = T)
 n_sp = nrow(samp_size_df)
 
 if (length(args) == 2) {
@@ -33,8 +33,36 @@ if (length(args) == 2) {
 }
 cat("Saving outputs for species from", n0, "to", n1, "\n")
 
+#check range coverage of background points
+range_coverage_df = read.csv(paste0(save_path, "range_coverage.csv"), header = T)
+for(i in seq(n0, n1, 1) {
+  sdm_out = readRDS(paste0(save_path, "/models/sdm_model_outputs_", i, ".rds"))
+  if(!is.null(sdm_out$range_coverage)) {
+    range_coverage = sdm_out$range_coverage
+  } else {
+    range_coverage = data.frame(matrix(NA, nrow = 1, ncol = length(keep_vars)))
+    rownames(range_coverage) = i
+    colnames(range_coverage) = paste0("wc2.1_5m_bio_", keep_vars)
+  }
+  if(range_coverage_df$bg_done[i] == 0) { #if not done yet
+    range_coverage_df[i, ] = c(range_coverage, 1) #save values and mark as done
+  }
+})
+write.csv(range_coverage_df, paste0(save_path, "range_coverage.csv"), row.names = F)
+
 for(i in seq(n0, n1, 1)) {
   sdm_out = readRDS(paste0(save_path, "/models/sdm_model_outputs_", i, ".rds"))
+  sdm_models = sdm_out$models[c("glm", "gam", "raf")]
+
+  # Create ensemble model
+  m_ens = fit_ensemble(
+       models = sdm_models,
+       ens_method = "meanw",
+       thr_model = "max_sens_spec",
+       metric = "TSS"
+       )
+
+  m_ens
 
   if(!is.null(sdm_out$data)) {
     samp_size = ifelse(sdm_out$samp_size$data_used == "thinning",
