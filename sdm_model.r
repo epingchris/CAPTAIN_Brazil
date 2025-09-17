@@ -1,7 +1,6 @@
 rm(list = ls())
 
 #Setup ----
-library(httpgd) #view plots in VS Code
 library(parallel)
 library(future) #parallelise lapply() : future_lapply()
 library(future.apply) #parallelise lapply(): future_lapply()
@@ -9,15 +8,12 @@ library(magrittr)
 library(tidyverse)
 library(terra)
 library(tidyterra)
-library(geodata) #world, worldclim_global
 library(fuzzyjoin)
-library(predicts)
 library(ENMTools) #raster.cor.plot, raster.cor.matrix, trimdupes.by.raster
 library(flexsdm)
 library(concaveman) #concaveman
 library(sf)
 
-hgd()
 save_path = "/maps/epr26/sdm_captain_out/"
 
 #Set optional user-selected project(s) to run
@@ -93,7 +89,7 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
       intersect(land)
     
     #sample background points (other option: flexsdm::sample_background)
-    bg = spatSample(ashape_buff, 1000, "random")
+    bg = spatSample(ashape_buff, 10000, "random")
     
     #visualize to verify
     plot_sample = ggplot() +
@@ -133,7 +129,6 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
       geom_spatvector(data = filter(sdm_part_vect, pb == 1), aes(col = .part), cex = 1) +
       scale_color_manual(values = c("red", "green", "blue", "purple")) +
       theme_bw()
-    plot_part
     ggsave(filename = paste0(save_path, "/plots/plot_part_", i_pad, ".png"),
            plot = plot_part, width = 6, height = 8, units = "in", dpi = 300)
     sdm_data = sdm_data_xy %>%
@@ -177,10 +172,23 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
       partition = "part",
       thr = "max_sens_spec")
     
+    #ensemble model
+    m_ens = flexsdm::fit_ensemble(
+      models = list(m_glm, m_gam, m_raf),
+      ens_method = "meanw",
+      thr_model = "max_sens_spec",
+      metric = "TSS"
+    )
     
     #generate predictions
     pred_list = flexsdm::sdm_predict(
       models = list(m_glm, m_gam, m_raf),
+      pred = bioclim,
+      predict_area = land
+    )
+
+    pred_ens = flexsdm::sdm_predict(
+      models = m_ens,
       pred = bioclim,
       predict_area = land
     )
@@ -193,7 +201,6 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
         scale_fill_continuous(limits = c(0, 1), type = "viridis") +
         labs(title = "GLM", fill = "Probability") +
         theme_bw()
-      plot_glm
       ggsave(filename = paste0(save_path, "/plots/plot_m_glm_", i_pad, ".png"),
              plot = plot_glm, width = 6, height = 8, units = "in", dpi = 300)
     } else {
@@ -225,40 +232,49 @@ for(i in seq(n0, n1, 1)) { #change to n_sp for full run
         scale_fill_continuous(limits = c(0, 1), type = "viridis") +
         labs(main = "Random forest", fill = "Probability") +
         theme_bw()
-      plot_raf
       ggsave(filename = paste0(save_path, "/plots/plot_m_raf_", i_pad, ".png"),
              plot = plot_raf, width = 6, height = 8, units = "in", dpi = 300)
     } else {    
       cat("Random forest model failed for species", sp_name, "\n")
       plot_raf = NULL
     }
-    
+
+    if (!is.null(pred_ens$meanw)) {
+      writeRaster(pred_ens$meanw, paste0(save_path, "/rasters/pred_ens_", i, ".tif"), overwrite = T)
+      plot_ens = ggplot() +
+        geom_spatraster(data = pred_ens$meanw) +
+        geom_spatvector(data = sp_occ_used, cex = 0.5, col = "red") +
+        scale_fill_continuous(limits = c(0, 1), type = "viridis") +
+        labs(main = "Ensemble", fill = "Probability") +
+        theme_bw()
+      ggsave(filename = paste0(save_path, "/plots/plot_m_ens_", i_pad, ".png"),
+             plot = plot_ens, width = 6, height = 8, units = "in", dpi = 300)
+    } else {    
+      cat("Ensemble model failed for species", sp_name, "\n")
+      plot_ens = NULL
+    }
+
+
   } else {
     sdm_data_xy = NULL
     sdm_data = NULL
-    plot_sample = NULL
-    sdm_part = NULL
-    plot_part = NULL
     range_coverage = NULL
     m_glm = NULL
     m_gam = NULL
     m_raf = NULL
-    pred_list = NULL
-    plot_glm = NULL
-    plot_gam = NULL
-    plot_raf = NULL
+    m_ens = NULL
   }
   b = Sys.time()
-  cat("Model completed for species", i, ", run time:", b - a, "\n")
+  cat("Model completed for species", i, ", run time:", as.numeric(b - a, units = "secs"), "\n")
 
   sdm_out = list(samp_size_info = samp_size_info,
                  sdm_data_xy = sdm_data_xy,
                  sdm_data = sdm_data,
                  range_coverage = range_coverage,
-                 models = list(glm = m_glm, gam = m_gam, raf = m_raf))
+                 models = list(glm = m_glm, gam = m_gam, raf = m_raf, ens = m_ens))
   saveRDS(sdm_out, paste0(save_path, "/models/sdm_model_outputs_", i, ".rds"))
 
 }
 
 b0 = Sys.time()
-cat("Total time:", b0 - a0, "\n")
+cat("Total time:", as.numeric(b0 - a0, units = "secs"), "\n")

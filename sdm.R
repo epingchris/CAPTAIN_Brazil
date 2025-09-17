@@ -1,3 +1,5 @@
+rm(list = ls())
+
 #Setup ----
 library(httpgd) #view plots in VS Code
 library(parallel)
@@ -9,10 +11,8 @@ library(terra)
 library(tidyterra)
 library(geodata) #world, worldclim_global
 library(fuzzyjoin)
-library(predicts)
 library(ENMTools) #raster.cor.plot, raster.cor.matrix, trimdupes.by.raster
 library(flexsdm)
-library(concaveman) #concaveman
 library(sf)
 
 hgd()
