@@ -153,10 +153,10 @@ for(i in seq_len(n_sp)) {
       n_thin = nrow(sp_occ_thin)
     } else {
       sp_occ_thin = flexsdm::occfilt_geo(data = crds(sp_occ_sel) %>% as.data.frame(),
-                                            x = "x", y = "y",
-                                            env_layer = bioclim,
-                                            method = c("cellsize", 1),
-                                            prj = crs(bioclim)) %>% #
+                                         x = "x", y = "y",
+                                         env_layer = bioclim,
+                                         method = c("cellsize", 1),
+                                         prj = crs(bioclim)) %>% #
         vect(geom = c("x", "y"), crs = crs(bioclim))
       n_thin = nrow(sp_occ_thin)
     }

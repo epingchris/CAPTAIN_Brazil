@@ -45,46 +45,24 @@ for(i in seq(n0, n1, 1)) {
     range_coverage_df[i, ] = c(range_coverage, 1) #save values and mark as done
   }
 }
-
-old_min_coverage = apply(range_coverage_df_old[1:100, 1:7], 1, min)
-new_min_coverage = apply(range_coverage_df[1:100, 1:7], 1, min)
-min_coverage_df = data.frame(min_coverage = c(old_min_coverage, new_min_coverage),
-                             samp_size = rep(c("1000", "10000"), each = 100))
-plot_min_coverage = ggplot(data = min_coverage_df, aes(x = samp_size, y = min_coverage)) +
-  geom_boxplot() +
-  labs(title = "Minimum range coverage of background points across selected bioclim variables",
-       x = "Sample size", y = "Minimum coverage") +
-  theme_minimal()
-ggsave(filename = paste0(save_path, "plot_sample_size_range_coverage.png"),
-       plot = plot_min_coverage, width = 6, height = 8, units = "in", dpi = 300)
 write.csv(range_coverage_df, paste0(save_path, "range_coverage.csv"), row.names = F)
 
 
 perf_list = vector("list", n1 - n0 + 1)
-for(i in seq(n0, n1, 1)) {
+lapply(seq(n0, n1, 1), function(i) {
   sdm_out = readRDS(paste0(save_path, "/models/sdm_model_outputs_", i, ".rds"))
-  if(!is.null(sdm_out$sdm_data)) {
-    sdm_models = sdm_out$models
-    model_names = names(sdm_models)
-
-    perf_df = lapply(seq_along(sdm_models), function(i) {
-      perf_x = sdm_models[[i]]$performance %>%
+  if(!is.null(sdm_out$model)) {
+    perf_df = sdm_out$model$performance %>%
       filter(threshold == "max_sens_spec") %>%
-        dplyr::select(thr_value, TPR_mean, TNR_mean, OR_mean, TSS_mean, AUC_mean) %>%
-        mutate(model = model_names[i])
-      return(perf_x)
-    }) %>%
-      bind_rows() %>%
-      mutate(species = i)
-    perf_list[[i - n0 + 1]] = perf_df %>%
+      dplyr::select(thr_value, TPR_mean, TNR_mean, OR_mean, TSS_mean, AUC_mean) %>%
+      mutate(species = i) %>%
       pivot_longer(cols = ends_with("_mean"), names_to = "metric", values_to = "value")
-    write.csv(perf_df, paste0(save_path, "model_performance/performance_", i, ".csv"), row.names = F)
     cat("Completed saving outputs for species", i, "\n")
   } else {
-    cat("Skipping species", i, "as models not found\n")
-    next
+    perf_df = data.frame(matrix(NA, nrow = 1, ncol = 4))
+    cat("Skipping species", i, "as model not found\n")
   }
-}
+})
 
 perf_all = perf_list %>%
   bind_rows()
