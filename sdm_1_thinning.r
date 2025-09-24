@@ -62,12 +62,6 @@ bioclim = rast(bioclim_paths) %>%
 var_order = names(bioclim) %>% sub("wc2.1_5m_bio_", "", .) %>% as.numeric() %>% order()
 bioclim = bioclim[[var_order]]
 
-#create raster mask for the Atlantic Forest ecoregion
-af_mask = bioclim[[1]] %>%
-  mask(aoi_proj) %>%
-  classify(rcl = matrix(c(-Inf, Inf, 1, NA, NA, 0), ncol = 3, byrow = T), right = NA, others = 0) #turn non Na values to 1
-writeRaster(af_mask, paste0(save_path, "af_mask.tif"), overwrite = T)
-
 #examine collinearity
 #removing redundant variables (pairwise: ‘ENMTML', ‘flexsdm', ‘modleR', ‘ntbox';
 #sequential: ‘fuzzySim', ‘SDMtune', ‘usdm')
@@ -80,7 +74,7 @@ ENMTools::raster.cor.plot(bioclim_red)
 mat_cor = ENMTools::raster.cor.matrix(bioclim_red)
 diag(mat_cor) = NA
 #biovars[keep_vars]
-writeRaster(bioclim_red, paste0(save_path, "bioclim_reduced.tif"), overwrite = T)
+writeRaster(bioclim_red, paste0(save_path, "rasters/bioclim_reduced.tif"), overwrite = T)
 
 
 #Occurrence data processing ----
