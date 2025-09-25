@@ -13,33 +13,32 @@ aoi_proj = vect(paste0(path, "atlantic_forest_global_200.geojson")) %>%
   project("EPSG:3857")
 af_mask = rast(paste0(path, "rasters/af_mask.tif"))
 
-#Retrieve or read data of travel time to nearest city
-if(!file.exists(paste0(path, "rasters/travel_time_to_cities_u9_proj.tif"))) {
-    accessibility = travel_time(to = "city", size = 9, up = T,
-                                path = paste0(path, "travel_time/"))
-    #gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/travel_time/travel/travel_time_to_cities_u9.tif \
-    #   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif
-    #gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif \
-    #   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_proj.tif
-}
+#Load data of travel time to nearest city
 accessibility = rast(paste0(path, "rasters/travel_time_to_cities_u9_proj.tif"))
+#Created by:
+# accessibility = geodata::travel_time(to = "city", size = 9, up = T,
+#                                      path = paste0(path, "travel_time/"))
+#gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/travel_time/travel/travel_time_to_cities_u9.tif \
+#   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif
+#gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif \
+#   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_proj.tif
 
-#Retrieve or read data of production per ha for all crops using all technologies
-if(!file.exists(paste0(path, "rasters/spam_2010_val_prod_per_area_proj.tif"))) {
-    crop_spam(crop = "maize", var = "val_prod",
-            path = "/maps/epr26/sdm_captain_out/crop_spam")
-    # gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/crop_spam/spam/spam2010V2r0_global_V_agg_VP_CR_AR_A.tif \
-    #   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif
-    # gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif \
-    #   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_proj.tif
-}
+
+#Load data of production per ha for all crops using all technologies
 val_prod = rast(paste0(path, "rasters/spam_2010_val_prod_per_area_proj.tif"))
+#Created by:
+# geodata::crop_spam(crop = "maize", var = "val_prod",
+#                    path = "/maps/epr26/sdm_captain_out/crop_spam")
+# gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/crop_spam/spam/spam2010V2r0_global_V_agg_VP_CR_AR_A.tif \
+#   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif
+# gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif \
+#   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_proj.tif
 
 #Retrieve or read elevation data
 elevation = elevation_global(res = 0.5, path = paste0(path, "elevation"), mask = T) %>%
     project("EPSG:3857")
 
-#resample to 10-km resolution to match bioclim variables
+#resample to 10-km resolution and scale values to 0-1 range
 accessibility_resamp = resample(accessibility, bioclim[[1]], method = "bilinear",
                                 filename = paste0(path, "rasters/travel_time_to_cities_u9_proj_resamp.tif"), overwrite = T)
 accessibility_range = range(extract(accessibility_resamp, aoi_proj)[, 2], na.rm = T)
