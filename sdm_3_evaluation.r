@@ -10,8 +10,8 @@ library(flexsdm)
 
 hgd()
 save_path = "/maps/epr26/sdm_captain_out/"
-samp_size_df = read.csv(paste0(save_path, "species_sample_size.csv"), header = T)
-n_sp = nrow(samp_size_df)
+sp_info = read.csv(paste0(save_path, "species_info.csv"), header = T)
+n_sp = nrow(sp_info)
 
 #retrieve model outputs and save evaluation metrics
 perf_list = vector("list", n_sp)

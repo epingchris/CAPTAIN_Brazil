@@ -18,8 +18,8 @@ save_path = "/maps/epr26/sdm_captain_out/"
 
 #Set optional user-selected project(s) to run
 args = commandArgs(trailingOnly = T)
-samp_size_df = read.csv(paste0(save_path, "species_sample_size.csv"), header = T)
-n_sp = nrow(samp_size_df)
+sp_info = read.csv(paste0(save_path, "species_info.csv"), header = T)
+n_sp = nrow(sp_info)
 
 if (length(args) == 0) {
   #all projects in project_var.csv
@@ -51,7 +51,7 @@ run_sdm = function(i) {
   a = Sys.time()
 
   #Get data
-  samp_size_df = read.csv(paste0(save_path, "species_sample_size.csv"), header = T)
+  sp_info = read.csv(paste0(save_path, "species_info.csv"), header = T)
   aoi_proj = vect(paste0(save_path, "atlantic_forest_global_200.geojson")) %>% project("EPSG:3857")
   land = vect(paste0(save_path, "aoi_land.geojson"))
   sp_occ_bbox = vect(paste0(save_path, "SpeciesOccurrenceData_bbox.geojson"))
@@ -59,9 +59,9 @@ run_sdm = function(i) {
   sp_occ_list = readRDS(paste0(save_path, "species_occurrence_thinned.rds"))
   keep_vars = c(1, 2, 7, 12, 15, 18, 19) #indices of selected bioclim variables after collinearity test
 
-  samp_size_info = samp_size_df[i, ]
-  sp_name = samp_size_info$sp_name
-  samp_size = samp_size_info$n_used
+  sp_info_i = sp_info[i, ]
+  sp_name = sp_info_i$sp_name
+  samp_size = sp_info_i$n_used
 
   i_pad = str_pad(i, 4, side = "left", pad = "0") #haha
   sp_occ_sel = sp_occ_bbox[sp_occ_bbox$tax == sp_name, ]
@@ -69,7 +69,7 @@ run_sdm = function(i) {
 
   if(samp_size <= 2) { #skip species with less than or equal to 2 occurrence points
     cat("Skipping species", i, "with less than or equal to 2 occurrence points\n", file = log_file, append = T)
-    sdm_out = list(samp_size_info = samp_size_info,
+    sdm_out = list(sp_info = sp_info_i,
                    sdm_data_xy = NULL,
                    sdm_data = NULL,
                    range_coverage = NULL,
@@ -228,7 +228,7 @@ run_sdm = function(i) {
   b = Sys.time()
   cat("Model completed for species", i, ", run time:", difftime(b, a, units = "secs"), "secs\n", file = log_file, append = T)
 
-  sdm_out = list(samp_size_info = samp_size_info,
+  sdm_out = list(sp_info = sp_info_i,
                  sdm_data_xy = sdm_data_xy,
                  sdm_data = sdm_data,
                  range_coverage = range_coverage,

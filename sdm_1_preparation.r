@@ -125,9 +125,9 @@ tax_df = as.data.frame(table(sp_occ_bbox$tax)) %>%
 n_sp = nrow(tax_df)
 
 sp_occ_list = vector("list", n_sp)
-samp_size_df = data.frame(index = numeric(), sp_name = character(),
-                          original = numeric(), thinned = numeric(), thin_perc = numeric(),
-                          data_used = character(), n_used = numeric(), flag = character())
+sp_info = data.frame(index = numeric(), sp_name = character(),
+                     original = numeric(), thinned = numeric(), thin_perc = numeric(),
+                     data_used = character(), n_used = numeric(), flag = character())
 
 for(i in seq_len(n_sp)) {
   a = Sys.time()
@@ -169,14 +169,48 @@ for(i in seq_len(n_sp)) {
   
   #flag data point abundance
   samp_size_flag = ifelse(n_used >= 30, "abundant", ifelse(n_used >= 15, "sparse", "insufficient"))
-  samp_size_df[i, ] = data.frame(index = i, sp_name = sp_name,
-                                 original = n_orig, thinned = n_thin, thin_perc = round((n_thin / n_orig) * 100, 1),
-                                 data_used = use, n_used = n_used, flag = samp_size_flag)
+  sp_info[i, ] = data.frame(index = i, sp_name = sp_name,
+                            original = n_orig, thinned = n_thin, thin_perc = round((n_thin / n_orig) * 100, 1),
+                            data_used = use, n_used = n_used, flag = samp_size_flag)
   sp_occ_list[[i]] = sp_occ_used$index
 
   b = Sys.time()
   cat(i, "-", sp_name, ":", b - a, "s\n")
 }
 
-write.csv(samp_size_df, paste0(save_path, "species_sample_size.csv"), row.names = F)
+write.csv(sp_info, paste0(save_path, "species_info.csv"), row.names = F)
 saveRDS(sp_occ_list, paste0(save_path, "species_occurrence_thinned.rds"))
+
+
+#Calculate maximum biomass per tree in a two-step process:
+#1. Reverse-estimate maximum diameter from maximum height using generic model 3 in Cysneiros et al. (2020)
+#https://cdnsciencepub.com/doi/full/10.1139/cjfr-2020-0060
+#log(H) = 1.029 + 0.567 * log(DBH)
+#DBH = exp((log(H) - 1.193) / 0.529)
+
+#H = 50.874 * (1 - exp(-0.042 * D ^ 0.784))
+#D = (log(1 - H / 50.874) / (-0.042)) ^ (1 / 0.784)
+#2. Use the Chave et al. (2005) pantropical model to estimate maximum AGB (kg) per tree for each species
+#https://link.springer.com/article/10.1007/s00442-005-0100-x
+#AGB = exp(-29.77 + ln(WD * D^2 * H)) ~ 0.0509 * WD * D^2 * H
+sp_info = read.csv(paste0(save_path, "species_info.csv"), header = T)
+sp_trait = read.csv(paste0(save_path, "SpeciesInfo.csv"), header = T)
+
+sp_info_merged = merge(sp_info,
+                       sp_trait[, c("Species", "RedList_international_Category_2023", "GrowthForm", "MaximumHeight_m", "WoodSpecificGravity")],
+                       by.x = "sp_name", by.y = "Species", all.x = T) %>%
+  mutate(maxH_use_mean = ifelse(is.na(MaximumHeight_m), T, F),
+         WSG_use_mean = ifelse(is.na(WoodSpecificGravity), T, F))
+
+#substitute species with NA for maxH/WSG with
+maxH_comm_mean = mean(sp_info_merged$MaximumHeight_m, na.rm = T)
+WSG_comm_mean = mean(sp_info_merged$WoodSpecificGravity, na.rm = T)
+sp_info_merged = sp_info_merged %>%
+  mutate(MaximumHeight_m = ifelse(maxH_use_mean, maxH_comm_mean, MaximumHeight_m),
+         WoodSpecificGravity = ifelse(WSG_use_mean, WSG_comm_mean, WoodSpecificGravity))
+
+#estimate maximum diameter and AGB
+sp_info_merged = sp_info_merged %>%
+  mutate(MaximumDiameter_cm = exp((log(MaximumHeight_m) - 1.029) / 0.567)) %>% #Cysneiros et al 2020
+  mutate(AGB_kg = exp(-2.977 + log(WoodSpecificGravity * (MaximumDiameter_cm ^ 2) * MaximumHeight_m))) #Chave et al 2005
+write.csv(sp_info_merged, paste0(save_path, "species_info.csv"), row.names = F)
