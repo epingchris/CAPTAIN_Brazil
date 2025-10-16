@@ -14,23 +14,12 @@ plan(multicore, workers = 16)
 Sys.setenv(OMP_NUM_THREADS = 4, OPENBLAS_NUM_THREADS = 4)
 #maximum number of threads used by OpenMP and OpenBLAS, usually under the hood for R
 
-path = "/maps/epr26/sdm_captain_out/"
-log_file = paste0(path, "log_disturbance_score.txt")
-aoi_proj = vect(paste0(path, "atlantic_forest_global_200.geojson")) %>%
-  project("EPSG:3857")
-bioclim = rast(paste0(path, "rasters/bioclim_reduced.tif"))
-samp_size_df = read.csv(paste0(path, "species_sample_size.csv"), header = T)
-n_sp = nrow(samp_size_df)
+#To define: path
+path = "/maps/epr26/captain_brazil/ideal_250m/"
 
-#Create or read raster mask for the Atlantic Forest ecoregion
-if(!file.exists(paste0(path, "rasters/af_mask.tif"))) {
-  af_mask = bioclim[[1]] %>%
-    mask(aoi_proj) %>%
-    classify(rcl = matrix(c(-Inf, Inf, 1, NA, NA, 0), ncol = 3, byrow = T), right = NA, others = 0) #turn non Na values to 1
-  writeRaster(af_mask, paste0(path, "rasters/af_mask.tif"), overwrite = T)
-} else {
-  af_mask = rast(paste0(path, "rasters/af_mask.tif"))
-}
+log_file = paste0(path, "log_disturbance_score.txt")
+aoi_proj = vect(paste0(path, "aoi_proj.geojson"))
+bioclim = rast(paste0(path, "rasters/bioclim_reduced.tif"))
 
 #Create or read 10-km grids over which to calculate percentage cover of each land cover class
 if(!file.exists(paste0(path, "grid_vect.geojson"))) {
@@ -50,7 +39,7 @@ PercCover = function(i) {
   grid_i = vect(paste0(path, "grid_vect.geojson"))[i]
 
   #Load cropped and reprojected land cover raster
-  lc_i = rast(paste0(path, "rasters/brazil_coverage_2024_af_proj.tif")) %>%
+  lc_i = rast(paste0(path, "rasters/brazil_coverage_2024_proj.tif")) %>%
     crop(grid_i, snap = "out")
   #Created by:
   # gdalwarp -te -58 -34 -34 -3 -r near /maps/epr26/sdm_captain_out/rasters/brazil_coverage_2024.tif \

@@ -7,17 +7,32 @@ library(terra)
 library(tidyterra)
 library(geodata) #geodata::travel_time, geodata::crop_spam
 
-path = "/maps/epr26/sdm_captain_out/"
+#path = "/maps/epr26/captain_brazil/af_10km/"
+path = "/maps/epr26/captain_brazil/ideal_250m/"
 bioclim = rast(paste0(path, "rasters/bioclim_reduced.tif"))
-aoi_proj = vect(paste0(path, "atlantic_forest_global_200.geojson")) %>%
-  project("EPSG:3857")
-af_mask = rast(paste0(path, "rasters/af_mask.tif"))
+aoi_proj = vect(paste0(path, "aoi_proj.geojson"))
+
+#Create or read raster mask for the Atlantic Forest ecoregion
+if(!file.exists(paste0(path, "rasters/aoi_mask.tif"))) {
+  aoi_mask = bioclim[[1]] %>%
+    mask(aoi_proj) %>%
+    classify(rcl = matrix(c(-Inf, Inf, 1, NA, NA, 0), ncol = 3, byrow = T), right = NA, others = 0) #turn non Na values to 1
+  writeRaster(aoi_mask, paste0(path, "rasters/aoi_mask.tif"), overwrite = T)
+} else {
+  aoi_mask = rast(paste0(path, "rasters/aoi_mask.tif"))
+}
+
+aoi = vect(paste0(path, "aoi.geojson"))
+crop_ext = c(floor(ext(aoi)[1]), ceiling(ext(aoi)[2]), floor(ext(aoi)[3]), ceiling(ext(aoi)[4]))
+#for ideal_350m:
+#xmin xmax ymin ymax 
+# -43  -41  -23  -21 
 
 #Load data of travel time to nearest city
 accessibility = rast(paste0(path, "rasters/travel_time_to_cities_u9_proj.tif"))
 #Created by:
 # accessibility = geodata::travel_time(to = "city", size = 9, up = T,
-#                                      path = paste0(path, "travel_time/"))
+#                                      path = path))
 #gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/travel_time/travel/travel_time_to_cities_u9.tif \
 #   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif
 #gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif \
@@ -28,15 +43,22 @@ accessibility = rast(paste0(path, "rasters/travel_time_to_cities_u9_proj.tif"))
 val_prod = rast(paste0(path, "rasters/spam_2010_val_prod_per_area_proj.tif"))
 #Created by:
 # geodata::crop_spam(crop = "maize", var = "val_prod",
-#                    path = "/maps/epr26/sdm_captain_out/crop_spam")
+#                    path = path)
 # gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/crop_spam/spam/spam2010V2r0_global_V_agg_VP_CR_AR_A.tif \
 #   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif
+# gdal_fillnodata.py -md 10 /maps/epr26/captain_brazil/ideal_350m/rasters/spam_2010_val_prod_per_area_cropped.tif \
+#   /maps/epr26/captain_brazil/ideal_350m/rasters/spam_2010_val_prod_per_area_filled.tif #fill small gaps with interpolation
 # gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif \
 #   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_proj.tif
 
 #Retrieve or read elevation data
-elevation = elevation_global(res = 0.5, path = paste0(path, "elevation"), mask = T) %>%
+if(!file.exists("/maps/epr26/captain_brazil/elevation.tif")) {
+  elevation = elevation_global(res = 0.5, path = paste0(path, "elevation"), mask = T) %>%
     project("EPSG:3857")
+  writeRaster(elevation, "/maps/epr26/captain_brazil/elevation.tif", overwrite = T)
+} else {
+  elevation = rast("/maps/epr26/captain_brazil/elevation.tif")
+}
 
 #resample to 10-km resolution and scale values to 0-1 range
 accessibility_resamp = resample(accessibility, bioclim[[1]], method = "bilinear",
@@ -58,8 +80,8 @@ elevation_scaled = (elevation_resamp - elevation_range[1]) / (elevation_range[2]
 writeRaster(elevation_scaled, paste0(path, "rasters/elevation_scaled.tif"), overwrite = T)
 
 cost = (val_prod_scaled + accessibility_scaled + elevation_scaled) / 3
-cost_na = is.na(cost) & !(af_mask == 0) #find cells that are NA *inside* the vector
-cost_out = (af_mask == 0)
+cost_na = is.na(cost) & !(aoi_mask == 0) #find cells that are NA *inside* the vector
+cost_out = (aoi_mask == 0)
 cost_rcl = cost
 cost_rcl[cost_out] = NA #replace those with 1 in the original raster
 cost_rcl[cost_na] = 1 #replace those with 1 in the original raster

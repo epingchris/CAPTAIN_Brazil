@@ -16,31 +16,40 @@ library(flexsdm)
 library(sf)
 
 hgd()
-save_path = "/maps/epr26/sdm_captain_out/"
+dir_path = "/maps/epr26/captain_brazil/"
+
+#To define: AOI path, resolution, output path
+proj_aoi = "200k_ha_corridor_Ideal-area.geojson" #"atlantic_forest_global_200.geojson" #
+proj_res = 250 #in meters
+proj_folder = "ideal_250m"
+
+proj_path = paste0(dir_path, proj_folder, "/")
 
 #Read AOI shapefile
-aoi = vect(paste0(save_path, "atlantic_forest_global_200.geojson")) %>%
+aoi = vect(paste0(dir_path, proj_aoi)) %>%
   project("EPSG:4326")
 aoi_proj = aoi %>% project("EPSG:3857")
 aoi_bbox = as.polygons(ext(aoi_proj), crs = crs(aoi_proj))
-writeVector(aoi_bbox, paste0(save_path, "atlantic_forest_global_200_bbox.geojson"), overwrite = T)
+writeVector(aoi, paste0(proj_path, "aoi.geojson"), overwrite = T)
+writeVector(aoi_proj, paste0(proj_path, "aoi_proj.geojson"), overwrite = T)
+writeVector(aoi_bbox, paste0(proj_path, "aoi_bbox.geojson"), overwrite = T)
 
 #get world map and land boundary
-worldmap = geodata::world(path = ".") %>% project("EPSG:4326") #GADM
+worldmap = geodata::world(path = dir_path) %>% project("EPSG:4326") #GADM
 worldmap_aoi = worldmap %>%
-  project("EPSG:3857") %>%
+  project(crs(aoi_proj)) %>%
   crop(ext(aoi_bbox))
 land = aggregate(worldmap_aoi)
-writeVector(land, paste0(save_path, "aoi_land.geojson"), overwrite = T)
+writeVector(land, paste0(proj_path, "aoi_land.geojson"), overwrite = T)
 
 #bioclimatic variable names
 biovars = c("Annual Mean Temperature", 
-            "Mean Diurnal Range (Mean of monthly (max temp - min temp))",
-            "Isothermality (BIO2/BIO7) (×100)",
-            "Temperature Seasonality (standard deviation ×100)",
+            "Mean Diurnal Range",
+            "Isothermality",
+            "Temperature Seasonality ",
             "Max Temperature of Warmest Month",
             "Min Temperature of Coldest Month",
-            "Temperature Annual Range (BIO5-BIO6)",
+            "Temperature Annual Range",
             "Mean Temperature of Wettest Quarter",
             "Mean Temperature of Driest Quarter",
             "Mean Temperature of Warmest Quarter",
@@ -48,17 +57,18 @@ biovars = c("Annual Mean Temperature",
             "Annual Precipitation",
             "Precipitation of Wettest Month",
             "Precipitation of Driest Month",
-            "Precipitation Seasonality (Coefficient of Variation)",
+            "Precipitation Seasonality",
             "Precipitation of Wettest Quarter",
             "Precipitation of Driest Quarter",
             "Precipitation of Warmest Quarter",
             "Precipitation of Coldest Quarter")
 
+
 #Environmental data processing ----
-bioclim_paths = list.files(path = "wc2.1_5m_bio/", pattern = "tif", full.names = T)
+bioclim_paths = list.files(path = paste0(dir_path, "wc2.1_5m_bio/"), pattern = "tif", full.names = T)
 bioclim = rast(bioclim_paths) %>%
   resample(rast(extent = ext(aoi))) %>% #crop exactly to the AOI; crop() doesn't do this
-  project("EPSG:3857", res = 10000) #reproject to 10-km
+  project(crs(aoi_proj), res = proj_res) #reproject to defined resolution
 var_order = names(bioclim) %>% sub("wc2.1_5m_bio_", "", .) %>% as.numeric() %>% order()
 bioclim = bioclim[[var_order]]
 
@@ -67,62 +77,82 @@ bioclim = bioclim[[var_order]]
 #sequential: ‘fuzzySim', ‘SDMtune', ‘usdm')
 #or reducing variable dimensionality through ordination (‘ENMTML', ‘ENMTools', ‘flexsdm', ‘kuenm', ‘ntbox')
 #flexsdm::correct_colinvar but there is an error
-cor_plot = ENMTools::raster.cor.plot(bioclim) #keep 1, 2, 7, 12, 15, 18, 19
+ENMTools::raster.cor.plot(bioclim) #visualise: keep 1, 2, 7, 12, 15, 18, 19
 keep_vars = c(1, 2, 7, 12, 15, 18, 19)
 bioclim_red = bioclim[[keep_vars]]
-ENMTools::raster.cor.plot(bioclim_red)
 mat_cor = ENMTools::raster.cor.matrix(bioclim_red)
 diag(mat_cor) = NA
 #biovars[keep_vars]
-writeRaster(bioclim_red, paste0(save_path, "rasters/bioclim_reduced.tif"), overwrite = T)
+writeRaster(bioclim_red, paste0(proj_path, "rasters/bioclim_reduced.tif"), overwrite = T)
+
+bioclim_named = bioclim
+names(bioclim_named) = biovars
+cor_plot = ENMTools::raster.cor.plot(bioclim_named)$cor.heatmap +
+  labs(x = NULL, y = NULL)
+ggsave(paste0(proj_path, "plot_bioclim_correlation_all.png"), width = 8, height = 6, units = "in", dpi = 300)
+
+bioclim_red_named = bioclim_red
+names(bioclim_red_named) = biovars[keep_vars]
+cor_plot_red = ENMTools::raster.cor.plot(bioclim_red_named)$cor.heatmap +
+  labs(x = NULL, y = NULL)
+ggsave(paste0(proj_path, "plot_bioclim_correlation_red.png"), width = 8, height = 6, units = "in", dpi = 300)
 
 
 #Occurrence data processing ----
-sp_occ_df = readRDS(paste0(save_path, "SpeciesOccurrenceData.rds")) %>%
+sp_occ_df = readRDS(paste0(dir_path, "SpeciesOccurrenceData.rds")) %>%
   as.data.frame() %>%
   filter(complete.cases(ddlat) & complete.cases(ddlon)) %>%
   mutate(x = ddlon, y = ddlat, index = row_number())
 sp_occ = sp_occ_df %>%
   vect(geom = c("ddlon", "ddlat"), crs = crs(aoi))
 sp_occ_proj = sp_occ %>%
-  project("EPSG:3857")
-writeVector(sp_occ_proj, paste0(save_path, "SpeciesOccurrenceData.geojson"), overwrite = T)
+  project(crs(aoi_proj))
+writeVector(sp_occ_proj, paste0(dir_path, "SpeciesOccurrenceData.geojson"), overwrite = T)
 sp_occ_bbox = crop(sp_occ_proj, ext(aoi_bbox)) #filter species occurrence data by AOI
-writeVector(sp_occ_bbox, paste0(save_path, "SpeciesOccurrenceData_bbox.geojson"), overwrite = T)
+writeVector(sp_occ_bbox, paste0(proj_path, "spocc_bbox.geojson"), overwrite = T)
 
-#visualize
-ggplot() +
+#visualize and examine anomalous coordinates: not really needed
+if(proj_folder == "af_10km") {
+  ggplot() +
   geom_spatvector(data = worldmap, fill = "lightyellow") +
   geom_spatvector(data = sp_occ, color = "orange", size = 0.05) +
   coord_sf(xlim = c(-120, -5), ylim = c(-50, 40)) +
   theme_bw()
 
-#examine anomalous coordinates
-dim(filter(sp_occ, x > -34.793015)) #many but not all are on islands east of Brazil, 394 entries
-dim(filter(sp_occ, x > -10)) #one entry, definitely wrong
-dim(filter(sp_occ, x > -20 & x <= -10)) #76 entries: possibly wrong?
-dim(filter(sp_occ, x > -30 & x <= -20)) #-20.5, -29.3: Ilha da Trindade; -18.x, -28~29.x: possibly wrong
-dim(filter(sp_occ, x > -34.793015 & x <= -30)) #77 entries: Ilha de Fernando de Noronha
+  dim(filter(sp_occ, x > -34.793015)) #many but not all are on islands east of Brazil, 394 entries
+  dim(filter(sp_occ, x > -10)) #one entry, definitely wrong
+  dim(filter(sp_occ, x > -20 & x <= -10)) #76 entries: possibly wrong?
+  dim(filter(sp_occ, x > -30 & x <= -20)) #-20.5, -29.3: Ilha da Trindade; -18.x, -28~29.x: possibly wrong
+  dim(filter(sp_occ, x > -34.793015 & x <= -30)) #77 entries: Ilha de Fernando de Noronha
 
-dim(filter(sp_occ, x < -85 & y <= 1)) #22 entries: Galapagos Islands
-dim(filter(sp_occ, x > -75 & y > 30)) #4 entries: Bermuda Main Island
-dim(filter(sp_occ, y > 38)) #3 entries: middle of the US
+  dim(filter(sp_occ, x < -85 & y <= 1)) #22 entries: Galapagos Islands
+  dim(filter(sp_occ, x > -75 & y > 30)) #4 entries: Bermuda Main Island
+  dim(filter(sp_occ, y > 38)) #3 entries: middle of the US
 
-anomaly_coord = data.frame(x = c(-9.24255, -18.42746, -18.42299, -18.42567, -18.08748, 39.52944),
-                           y = c(-8.00000, -18.42746, -29.07226, -29.08331, -28.82678, -99.15207))
-anomaly = fuzzyjoin::difference_inner_join(
-  sp_occ_df, anomaly_coord,
-  by = c("x", "y"),
-  max_dist = 1e-5
-) %>%
-  dplyr::select(!c("x.y", "y.y")) %>%
-  rename(x = x.x, y = y.x)
+  anomaly_coord = data.frame(x = c(-9.24255, -18.42746, -18.42299, -18.42567, -18.08748, 39.52944),
+                            y = c(-8.00000, -18.42746, -29.07226, -29.08331, -28.82678, -99.15207))
+  anomaly = fuzzyjoin::difference_inner_join(
+    sp_occ_df, anomaly_coord,
+    by = c("x", "y"),
+    max_dist = 1e-5
+  ) %>%
+    dplyr::select(!c("x.y", "y.y")) %>%
+    rename(x = x.x, y = y.x)
+}
 
 
 # Perform thinning and examine sample size ----
 tax_df = as.data.frame(table(sp_occ_bbox$tax)) %>%
   rename(tax = Var1, count = Freq)
 n_sp = nrow(tax_df)
+
+if(proj_folder == "af_10km") {
+  write.table(row.names(tax_df), paste0(proj_path, "species_retained.txt"), sep = "\n", row.names = F, col.names = F)
+} else if (proj_folder == "ideal_250m") {
+  sp_info = read.csv(paste0(dir_path, "af_10km/species_info.csv"), header = T) %>%
+    mutate(in_ideal = ifelse(sp_name %in% tax_df$tax, T, F))
+  write.table(subset(sp_info, in_ideal)$index, paste0(proj_path, "species_retained.txt"), sep = "\n", row.names = F, col.names = F)
+}
 
 sp_occ_list = vector("list", n_sp)
 sp_info = data.frame(index = numeric(), sp_name = character(),
@@ -178,8 +208,8 @@ for(i in seq_len(n_sp)) {
   cat(i, "-", sp_name, ":", b - a, "s\n")
 }
 
-write.csv(sp_info, paste0(save_path, "species_info.csv"), row.names = F)
-saveRDS(sp_occ_list, paste0(save_path, "species_occurrence_thinned.rds"))
+write.csv(sp_info, paste0(proj_path, "species_info.csv"), row.names = F)
+saveRDS(sp_occ_list, paste0(proj_path, "species_occurrence_thinned.rds"))
 
 
 #Calculate maximum biomass per tree in a two-step process:
@@ -193,8 +223,8 @@ saveRDS(sp_occ_list, paste0(save_path, "species_occurrence_thinned.rds"))
 #2. Use the Chave et al. (2005) pantropical model to estimate maximum AGB (kg) per tree for each species
 #https://link.springer.com/article/10.1007/s00442-005-0100-x
 #AGB = exp(-29.77 + ln(WD * D^2 * H)) ~ 0.0509 * WD * D^2 * H
-sp_info = read.csv(paste0(save_path, "species_info.csv"), header = T)
-sp_trait = read.csv(paste0(save_path, "SpeciesInfo.csv"), header = T)
+sp_info = read.csv(paste0(proj_path, "species_info.csv"), header = T)
+sp_trait = read.csv(paste0(dir_path, "SpeciesInfo.csv"), header = T)
 
 sp_info_merged = merge(sp_info,
                        sp_trait[, c("Species", "RedList_international_Category_2023", "GrowthForm", "MaximumHeight_m", "WoodSpecificGravity")],
@@ -213,4 +243,4 @@ sp_info_merged = sp_info_merged %>%
 sp_info_merged = sp_info_merged %>%
   mutate(MaximumDiameter_cm = exp((log(MaximumHeight_m) - 1.029) / 0.567)) %>% #Cysneiros et al 2020
   mutate(AGB_kg = exp(-2.977 + log(WoodSpecificGravity * (MaximumDiameter_cm ^ 2) * MaximumHeight_m))) #Chave et al 2005
-write.csv(sp_info_merged, paste0(save_path, "species_info.csv"), row.names = F)
+write.csv(sp_info_merged, paste0(proj_path, "species_info.csv"), row.names = F)
