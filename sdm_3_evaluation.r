@@ -9,7 +9,7 @@ library(tidyterra)
 library(flexsdm)
 
 hgd()
-path = "/maps/epr26/sdm_captain_out/"
+path = "/maps/epr26/captain_brazil/af_10km/"
 sp_info = read.csv(paste0(path, "species_info.csv"), header = T)
 n_sp = nrow(sp_info)
 
@@ -80,9 +80,26 @@ perf_df_plot_sel = subset(perf_df_plot, !sp_excl) %>%
   mutate(group = "Retained species")
 perf_df_plot_all = rbind(perf_df_plot, perf_df_plot_sel)
 
+annot_df = perf_df_plot_sel %>%
+  group_by(metric) %>%
+  summarise(median = median(value, na.rm = T),
+            p05 = quantile(value, 0.05, na.rm = T),
+            p95 = quantile(value, 0.95, na.rm = T)) %>%
+  ungroup() %>%
+  mutate(group = "Retained species",
+         x = 1,
+         y = case_match(metric,
+                        "Sensitivity" ~ 0.5,
+                        "Specificity" ~ 0.5,
+                        "Omission Rate" ~ 0.5,
+                        "True Skill Statistic" ~ 0.25,
+                        "Area Under Curve" ~ 0.7),
+         label = paste0(metric, ": ", round(median, 2), " [", round(p05, 2), "-", round(p95, 2), "]"))
+
 plot_perf = ggplot(perf_df_plot_all, aes(y = value)) +
   geom_violin(aes(x = 1), trim = T, fill = "lightblue", alpha = 0.4) +
   geom_boxplot(aes(x = 1), width = 0.3, outlier.size = 0.5, fill = "white") +
+  geom_text(data = annot_df, aes(group = group, x = x, y = y, label = label), size = 5) +
   facet_grid(vars(metric), vars(group), scales = "free_y", switch = "y") +
   labs(title = "", x = "", y = "") +
   theme_bw() +

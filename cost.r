@@ -7,76 +7,61 @@ library(terra)
 library(tidyterra)
 library(geodata) #geodata::travel_time, geodata::crop_spam
 
-#path = "/maps/epr26/captain_brazil/af_10km/"
-path = "/maps/epr26/captain_brazil/ideal_250m/"
-bioclim = rast(paste0(path, "rasters/bioclim_reduced.tif"))
-aoi_proj = vect(paste0(path, "aoi_proj.geojson"))
+dir_path = "/maps/epr26/captain_brazil/"
+#proj_path = "/maps/epr26/captain_brazil/af_10km/"
+proj_path = "/maps/epr26/captain_brazil/ideal_250m/"
+bioclim = rast(paste0(proj_path, "rasters/bioclim.tif"))
+aoi = vect(paste0(proj_path, "aoi.geojson"))
+aoi_proj = vect(paste0(proj_path, "aoi_proj.geojson"))
+proj_res = 250 #in meters
 
-#Create or read raster mask for the Atlantic Forest ecoregion
-if(!file.exists(paste0(path, "rasters/aoi_mask.tif"))) {
+#Create or read AOI mask
+if(!file.exists(paste0(proj_path, "rasters/aoi_mask.tif"))) {
   aoi_mask = bioclim[[1]] %>%
     mask(aoi_proj) %>%
     classify(rcl = matrix(c(-Inf, Inf, 1, NA, NA, 0), ncol = 3, byrow = T), right = NA, others = 0) #turn non Na values to 1
-  writeRaster(aoi_mask, paste0(path, "rasters/aoi_mask.tif"), overwrite = T)
+  writeRaster(aoi_mask, paste0(proj_path, "rasters/aoi_mask.tif"), overwrite = T)
 } else {
-  aoi_mask = rast(paste0(path, "rasters/aoi_mask.tif"))
+  aoi_mask = rast(paste0(proj_path, "rasters/aoi_mask.tif"))
 }
-
-aoi = vect(paste0(path, "aoi.geojson"))
-crop_ext = c(floor(ext(aoi)[1]), ceiling(ext(aoi)[2]), floor(ext(aoi)[3]), ceiling(ext(aoi)[4]))
-#for ideal_350m:
-#xmin xmax ymin ymax 
-# -43  -41  -23  -21 
 
 #Load data of travel time to nearest city
-accessibility = rast(paste0(path, "rasters/travel_time_to_cities_u9_proj.tif"))
-#Created by:
-# accessibility = geodata::travel_time(to = "city", size = 9, up = T,
-#                                      path = path))
-#gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/travel_time/travel/travel_time_to_cities_u9.tif \
-#   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif
-#gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_cropped.tif \
-#   /maps/epr26/sdm_captain_out/rasters/travel_time_to_cities_u9_proj.tif
-
+accessibility_orig = geodata::travel_time(to = "city", size = 9, up = T, path = dir_path)
+accessibility = accessibility_orig %>%
+  crop(ext(aoi)) %>%
+  project(crs(aoi_proj), res = proj_res) #reproject to defined resolution
+writeRaster(accessibility, paste0(proj_path, "rasters/accessibility.tif"), overwrite = T)
 
 #Load data of production per ha for all crops using all technologies
-val_prod = rast(paste0(path, "rasters/spam_2010_val_prod_per_area_proj.tif"))
-#Created by:
-# geodata::crop_spam(crop = "maize", var = "val_prod",
-#                    path = path)
-# gdalwarp -te -58 -34 -34 -3 -r bilinear /maps/epr26/sdm_captain_out/crop_spam/spam/spam2010V2r0_global_V_agg_VP_CR_AR_A.tif \
-#   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif
-# gdal_fillnodata.py -md 10 /maps/epr26/captain_brazil/ideal_350m/rasters/spam_2010_val_prod_per_area_cropped.tif \
-#   /maps/epr26/captain_brazil/ideal_350m/rasters/spam_2010_val_prod_per_area_filled.tif #fill small gaps with interpolation
-# gdalwarp -t_srs EPSG:3857 /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_cropped.tif \
-#   /maps/epr26/sdm_captain_out/rasters/spam_2010_val_prod_per_area_proj.tif
+#val_prod = rast(paste0(path, "rasters/spam_2010_val_prod_per_area_proj.tif"))
+if(!file.exists(paste0(dir_path, "crop_spam/spam/spam2010V2r0_global_V_agg_VP_CR_AR_A.tif"))) {
+  geodata::crop_spam(crop = "maize", var = "val_prod", path = dir_path)
+}
+val_prod = rast(paste0(dir_path, "crop_spam/spam/spam2010V2r0_global_V_agg_VP_CR_AR_A.tif")) %>%
+  crop(ext(buffer(aoi, 20000))) %>% #20-km buffer to avoid edge effects
+  focal(w = 3, fun = function(x) {if (is.na(x[5])) mean(x, na.rm = T) else x[5]}) %>% #interpolate NAs using 3x3 moving window
+  project(crs(aoi_proj), res = proj_res) %>% #reproject to defined resolution
+  crop(ext(aoi_proj)) #crop again
+writeRaster(val_prod, paste0(proj_path, "rasters/val_prod.tif"), overwrite = T)
 
 #Retrieve or read elevation data
-if(!file.exists("/maps/epr26/captain_brazil/elevation.tif")) {
-  elevation = elevation_global(res = 0.5, path = paste0(path, "elevation"), mask = T) %>%
-    project("EPSG:3857")
-  writeRaster(elevation, "/maps/epr26/captain_brazil/elevation.tif", overwrite = T)
-} else {
-  elevation = rast("/maps/epr26/captain_brazil/elevation.tif")
-}
+elevation_orig = geodata::elevation_global(res = 0.5, path = paste0(dir_path, "elevation"), mask = T)
+elevation = elevation_orig %>%
+  crop(ext(aoi)) %>%
+  project(crs(aoi_proj), res = proj_res) #reproject to defined resolution
+writeRaster(elevation, paste0(proj_path, "rasters/elevation.tif"), overwrite = T)
 
-#resample to 10-km resolution and scale values to 0-1 range
-accessibility_resamp = resample(accessibility, bioclim[[1]], method = "bilinear",
-                                filename = paste0(path, "rasters/travel_time_to_cities_u9_proj_resamp.tif"), overwrite = T)
-accessibility_range = range(extract(accessibility_resamp, aoi_proj)[, 2], na.rm = T)
-accessibility_scaled = (accessibility_resamp - accessibility_range[1]) / (accessibility_range[2] - accessibility_range[1])
+#scale values to 0-1 range
+accessibility_range = range(extract(accessibility, aoi_proj)[, 2], na.rm = T)
+accessibility_scaled = (accessibility - accessibility_range[1]) / (accessibility_range[2] - accessibility_range[1])
 writeRaster(accessibility_scaled, paste0(path, "rasters/accessibility_scaled.tif"), overwrite = T)
 
-val_prod_resamp = resample(val_prod, bioclim[[1]], method = "bilinear",
-                           filename = paste0(path, "rasters/spam_2010_val_prod_per_area_proj_resamp.tif"), overwrite = T)
-val_prod_range = range(extract(val_prod_resamp, aoi_proj)[, 2], na.rm = T)
-val_prod_scaled = (val_prod_resamp - val_prod_range[1]) / (val_prod_range[2] - val_prod_range[1])
+val_prod_range = range(extract(val_prod, aoi_proj)[, 2], na.rm = T)
+val_prod_scaled = (val_prod - val_prod_range[1]) / (val_prod_range[2] - val_prod_range[1])
 writeRaster(val_prod_scaled, paste0(path, "rasters/val_prod_scaled.tif"), overwrite = T)
 
-elevation_resamp = resample(elevation, bioclim[[1]], method = "bilinear",
-                            filename = paste0(path, "rasters/elevation_resamp.tif"), overwrite = T)
-elevation_range = range(extract(elevation_resamp, aoi_proj)[, 2], na.rm = T)
-elevation_scaled = (elevation_resamp - elevation_range[1]) / (elevation_range[2] - elevation_range[1])
+elevation_range = range(extract(elevation, aoi_proj)[, 2], na.rm = T)
+elevation_scaled = (elevation - elevation_range[1]) / (elevation_range[2] - elevation_range[1])
 writeRaster(elevation_scaled, paste0(path, "rasters/elevation_scaled.tif"), overwrite = T)
 
 cost = (val_prod_scaled + accessibility_scaled + elevation_scaled) / 3

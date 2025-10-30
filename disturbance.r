@@ -19,11 +19,11 @@ path = "/maps/epr26/captain_brazil/ideal_250m/"
 
 log_file = paste0(path, "log_disturbance_score.txt")
 aoi_proj = vect(paste0(path, "aoi_proj.geojson"))
-bioclim = rast(paste0(path, "rasters/bioclim_reduced.tif"))
+aoi_mask = rast(paste0(path, "rasters/aoi_mask.tif"))
 
 #Create or read 10-km grids over which to calculate percentage cover of each land cover class
 if(!file.exists(paste0(path, "grid_vect.geojson"))) {
-  grid = rast(bioclim[[1]])
+  grid = rast(aoi_mask)
   names(grid) = "grid_id"
   grid_vect = as.polygons(grid)
   values(grid_vect) = seq_len(ncell(grid)) #assign unique IDs
@@ -64,7 +64,7 @@ PercCover = function(i) {
   prop = as.numeric(tb / sum(tb) * 100)
 
   #fill in zeros for missing classes and standardise output
-  missing_classes = setdiff(0:76, as.numeric(names(tb))) #0-75 are land cover classes
+  missing_classes = setdiff(0:76, as.numeric(names(tb))) #0-76 are land cover classes
   if(length(missing_classes) > 0) {
     prop = c(prop, rep(0, length(missing_classes)))
     names(prop) = paste0("c", str_pad(c(names(tb), as.character(missing_classes)), 2, side = "left", pad = "0"))
@@ -111,18 +111,18 @@ prop_df = read.csv(paste0(path, "land_cover_percentage.csv"), header = T)
 prop_rcl = prop_df %>%
   mutate(forest = c01 + c03 + c05 + c06 + c49,
          grassland = c04 + c12 + c29 + c50,
-         water = c11 + c32 + c26 + c33,
-         beach = c23,
          forest_sec = c76,
          plantation = c09,
          cultivation = c14 + c15 + c18 + c19 + c39 + c20 + c40 + c62 + c41 + c36 + c46 + c47 + c35 + c48 + c21 + c31,
+         coast = c23,
+         water = c11 + c32 + c26 + c33,
          urban = c24 + c30 + c75 + c25) %>%
-  mutate(other = 100 - forest - grassland - water - beach - forest_sec - plantation - cultivation - urban) %>%
+  mutate(other = 100 - forest - grassland - water - coast - forest_sec - plantation - cultivation - urban) %>%
   dplyr::select(grid, forest, grassland, water, beach, forest_sec, plantation, cultivation, urban, other) %>%
-  mutate(score = (forest_sec * 0.3 + plantation * 0.5 + cultivation * 0.7 + urban * 1 + other * 0.5) / 100)
+  mutate(score = (forest_sec * 0.3 + plantation * 0.5 + cultivation * 0.7 + coast * 0.5, water * 1 + urban * 1 + other * 0.5) / 100)
 write.csv(prop_rcl, paste0(path, "land_cover_percentage_reclassified.csv"), row.names = F)
 
 grid_vect$score = prop_rcl$score
-disturbance = rasterize(grid_vect, bioclim[[1]], field = "score")
+disturbance = rasterize(grid_vect, aoi_mask, field = "score")
 varnames(disturbance) = "disturbance"
 writeRaster(disturbance, paste0(path, "rasters/disturbance_score.tif"), overwrite = T)
